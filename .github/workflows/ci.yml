@@ -1,0 +1,114 @@
+name: ci
+# push to main and pull_request only. Never pull_request_target: the App
+# token below must not reach code from a fork.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Private dobbo-ca Go modules (deflate-go, jpeg-go) are fetched with a
+# short-lived GitHub App token minted per job. Hosted runners only (public
+# repo: never ARC). Jobs that need the copies skip on fork and Dependabot PRs,
+# which get no secrets; gofmt needs no module and still runs.
+jobs:
+  gofmt:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+
+  amd64:
+    if: ${{ github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-24.04
+    env:
+      CGO_ENABLED: 0
+      GOPRIVATE: github.com/dobbo-ca/deflate-go,github.com/dobbo-ca/jpeg-go,github.com/dobbo-ca/jp2k-go,github.com/dobbo-ca/webp-go
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          # Private source must not reach the public repo's Actions cache.
+          cache: false
+      - id: app
+        if: ${{ vars.CI_READ_APP_ID != '' && github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.CI_READ_APP_ID }}
+          private-key: ${{ secrets.CI_READ_APP_KEY }}
+          owner: dobbo-ca
+          repositories: deflate-go,jpeg-go
+          permission-contents: read
+      # Token only in THIS step's env (not $GITHUB_ENV): later steps run PR code.
+      - name: download private modules
+        if: ${{ steps.app.outcome == 'success' }}
+        env:
+          GIT_CONFIG_COUNT: 2
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ steps.app.outputs.token }}@github.com/dobbo-ca/deflate-go.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/dobbo-ca/deflate-go
+          GIT_CONFIG_KEY_1: url.https://x-access-token:${{ steps.app.outputs.token }}@github.com/dobbo-ca/jpeg-go.insteadOf
+          GIT_CONFIG_VALUE_1: https://github.com/dobbo-ca/jpeg-go
+        # A pseudo-version is checked by `git fetch --unshallow`, which races on a
+        # cold cache ("shallow file has changed"); a retry finds it complete.
+        # Tagging the copies under the dobbo-ca path removes the need.
+        run: for i in 1 2 3; do go mod download && exit 0; sleep 2; done; exit 1
+      - if: ${{ steps.app.outcome == 'skipped' }}
+        run: echo "::notice::private-module token not minted (no CI_READ_APP_ID, fork or Dependabot)"
+      - run: go build ./...
+      - run: go vet ./...
+      - name: vet arm64
+        run: GOARCH=arm64 go vet ./...
+      - name: cross-build without cgo
+        run: GOOS=linux GOARCH=arm64 go build ./...
+      - name: golangci-lint
+        run: |
+          GOFLAGS= go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+          "$(go env GOPATH)/bin/golangci-lint" run
+      - run: go test -count=1 ./...
+      - name: race
+        env:
+          CGO_ENABLED: 1
+        run: go test -race -count=1 ./...
+      - name: fuzz smoke
+        run: go test -run '^$' -fuzz '^FuzzTIFF$' -fuzztime 20s .
+
+  arm64:
+    if: ${{ github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-24.04-arm
+    env:
+      CGO_ENABLED: 0
+      GOPRIVATE: github.com/dobbo-ca/deflate-go,github.com/dobbo-ca/jpeg-go,github.com/dobbo-ca/jp2k-go,github.com/dobbo-ca/webp-go
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - id: app
+        if: ${{ vars.CI_READ_APP_ID != '' && github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.CI_READ_APP_ID }}
+          private-key: ${{ secrets.CI_READ_APP_KEY }}
+          owner: dobbo-ca
+          repositories: deflate-go,jpeg-go
+          permission-contents: read
+      - name: download private modules
+        if: ${{ steps.app.outcome == 'success' }}
+        env:
+          GIT_CONFIG_COUNT: 2
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ steps.app.outputs.token }}@github.com/dobbo-ca/deflate-go.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/dobbo-ca/deflate-go
+          GIT_CONFIG_KEY_1: url.https://x-access-token:${{ steps.app.outputs.token }}@github.com/dobbo-ca/jpeg-go.insteadOf
+          GIT_CONFIG_VALUE_1: https://github.com/dobbo-ca/jpeg-go
+        # A pseudo-version is checked by `git fetch --unshallow`, which races on a
+        # cold cache ("shallow file has changed"); a retry finds it complete.
+        # Tagging the copies under the dobbo-ca path removes the need.
+        run: for i in 1 2 3; do go mod download && exit 0; sleep 2; done; exit 1
+      - if: ${{ steps.app.outcome == 'skipped' }}
+        run: echo "::notice::private-module token not minted (no CI_READ_APP_ID, fork or Dependabot)"
+      - run: go vet ./...
+      - run: go test -count=1 ./...

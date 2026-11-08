@@ -1,0 +1,6 @@
+tiff-go
+Copyright (c) 2026 Chris Dobbyn. MIT licensed (see LICENSE).
+
+The decoders are new code. golang.org/x/image/ccitt (BSD-3-Clause, The Go
+Authors) is used as a dependency, not copied. github.com/dobbo-ca/deflate-go
+and github.com/dobbo-ca/jpeg-go are the owner's own modules.

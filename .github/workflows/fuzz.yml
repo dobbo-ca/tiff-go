@@ -1,0 +1,46 @@
+name: fuzz
+# Nightly, hosted runners only (public repo: never ARC). schedule and
+# workflow_dispatch never run fork code, so the App token is safe here.
+on:
+  schedule: [{ cron: '23 7 * * *' }]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    if: ${{ vars.CI_READ_APP_ID != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CGO_ENABLED: 0
+      GOPRIVATE: github.com/dobbo-ca/deflate-go,github.com/dobbo-ca/jpeg-go,github.com/dobbo-ca/jp2k-go,github.com/dobbo-ca/webp-go
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.CI_READ_APP_ID }}
+          private-key: ${{ secrets.CI_READ_APP_KEY }}
+          owner: dobbo-ca
+          repositories: deflate-go,jpeg-go
+          permission-contents: read
+      - name: download private modules
+        env:
+          GIT_CONFIG_COUNT: 2
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ steps.app.outputs.token }}@github.com/dobbo-ca/deflate-go.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/dobbo-ca/deflate-go
+          GIT_CONFIG_KEY_1: url.https://x-access-token:${{ steps.app.outputs.token }}@github.com/dobbo-ca/jpeg-go.insteadOf
+          GIT_CONFIG_VALUE_1: https://github.com/dobbo-ca/jpeg-go
+        run: for i in 1 2 3; do go mod download && exit 0; sleep 2; done; exit 1
+      - run: go test -run '^$' -fuzz '^FuzzTIFF$' -fuzztime 5m .
+      - if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: crashers
+          path: testdata/fuzz
