@@ -51,7 +51,10 @@ jobs:
           GIT_CONFIG_VALUE_0: https://github.com/dobbo-ca/deflate-go
           GIT_CONFIG_KEY_1: url.https://x-access-token:${{ steps.app.outputs.token }}@github.com/dobbo-ca/jpeg-go.insteadOf
           GIT_CONFIG_VALUE_1: https://github.com/dobbo-ca/jpeg-go
-        run: go mod download
+        # A pseudo-version is checked by `git fetch --unshallow`, which races on a
+        # cold cache ("shallow file has changed"); a retry finds it complete.
+        # Tagging the copies under the dobbo-ca path removes the need.
+        run: for i in 1 2 3; do go mod download && exit 0; sleep 2; done; exit 1
       - if: ${{ steps.app.outcome == 'skipped' }}
         run: echo "::notice::private-module token not minted (no CI_READ_APP_ID, fork or Dependabot)"
       - run: go build ./...
@@ -101,7 +104,10 @@ jobs:
           GIT_CONFIG_VALUE_0: https://github.com/dobbo-ca/deflate-go
           GIT_CONFIG_KEY_1: url.https://x-access-token:${{ steps.app.outputs.token }}@github.com/dobbo-ca/jpeg-go.insteadOf
           GIT_CONFIG_VALUE_1: https://github.com/dobbo-ca/jpeg-go
-        run: go mod download
+        # A pseudo-version is checked by `git fetch --unshallow`, which races on a
+        # cold cache ("shallow file has changed"); a retry finds it complete.
+        # Tagging the copies under the dobbo-ca path removes the need.
+        run: for i in 1 2 3; do go mod download && exit 0; sleep 2; done; exit 1
       - if: ${{ steps.app.outcome == 'skipped' }}
         run: echo "::notice::private-module token not minted (no CI_READ_APP_ID, fork or Dependabot)"
       - run: go vet ./...
