@@ -92,35 +92,53 @@ func (j *jpegRows) ReadRow(dst []byte) error {
 // bandable reports whether jpeg-go can decode b a band at a time: a baseline
 // frame that is single-component or whose first scan carries every component
 // (the same gate as jpeg-go; otherwise each band re-decodes the whole frame).
-// Extra 0xFF fill bytes before a marker are skipped, as the decoder does.
+// Markers are found as jpeg-go's findMarker does: bytes between segments are
+// skipped, and TEM and RSTn have no length. Any other reading would let a file
+// show this gate one frame and the decoder another.
 func bandable(b []byte) bool {
 	n := 0 // frame components, 0 until SOF is seen
-	for i := 2; i < len(b); {
-		if b[i] != 0xff {
-			return false
-		}
-		for i < len(b) && b[i] == 0xff {
-			i++
-		}
-		if i+3 > len(b) {
-			return false
-		}
-		m, l := b[i], int(b[i+1])<<8+int(b[i+2])
-		if m == 0xc0 || m == 0xc1 { // baseline / extended sequential
-			if i+9 > len(b) {
+	for i := 2; ; {
+		var m byte
+		for m == 0 {
+			for i < len(b) && b[i] != 0xff {
+				i++
+			}
+			for i < len(b) && b[i] == 0xff {
+				i++
+			}
+			if i >= len(b) {
 				return false
 			}
-			n = int(b[i+8])
+			m = b[i]
+			i++
+		}
+		if m == 0x01 || m >= 0xd0 && m <= 0xd7 {
+			continue
+		}
+		if m == 0xd8 || m == 0xd9 || i+2 > len(b) {
+			return false // duplicate SOI, EOI, truncated
+		}
+		l := int(b[i])<<8 | int(b[i+1])
+		if l < 2 && (m >= 0xe0 && m <= 0xef || m == 0xfe || m == 0xdc) {
+			l = 2
+		}
+		if l < 2 || i+l > len(b) && m != 0xda { // jpeg-go reads a short SOS as is
+			return false
+		}
+		switch {
+		case m == 0xc0 || m == 0xc1: // baseline / extended sequential
+			if l < 8 {
+				return false
+			}
+			n = int(b[i+7])
 			if n == 0 {
 				return false
 			}
-		} else if m >= 0xc2 && m <= 0xcf && m != 0xc4 && m != 0xc8 && m != 0xcc {
+		case m >= 0xc2 && m <= 0xcf && m != 0xc4 && m != 0xc8 && m != 0xcc:
 			return false // progressive, lossless, arithmetic
+		case m == 0xda: // first scan
+			return n == 1 || n > 0 && i+2 < len(b) && int(b[i+2]) == n
 		}
-		if m == 0xda { // first scan
-			return n == 1 || (n > 0 && i+3 < len(b) && int(b[i+3]) == n)
-		}
-		i += 1 + l
+		i += l
 	}
-	return false
 }
