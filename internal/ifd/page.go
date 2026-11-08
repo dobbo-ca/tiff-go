@@ -111,7 +111,7 @@ func (f *File) Page(i int, maxPixels int64) (*Page, error) {
 	if planar != 1 {
 		return nil, e.Unsupported("planar configuration %d", planar)
 	}
-	if fill != 1 {
+	if fill != 1 && fill != 2 {
 		return nil, e.Unsupported("fill order %d", fill)
 	}
 	if pred != 1 && pred != 2 {
@@ -147,6 +147,9 @@ func (f *File) Page(i int, maxPixels int64) (*Page, error) {
 			return nil, e.Unsupported("bits per sample %d", bs[0])
 		}
 		p.BPS = int(bs[0])
+	}
+	if fill == 2 && p.BPS < 8 { // libtiff ignores it at 8 bits and up
+		return nil, e.Unsupported("fill order %d at %d bits", fill, p.BPS)
 	}
 	if pred == 2 && p.BPS != 8 && p.BPS != 16 {
 		return nil, e.Unsupported("predictor at %d bits", p.BPS)
@@ -203,6 +206,9 @@ func (f *File) Page(i int, maxPixels int64) (*Page, error) {
 		p.across, p.down = int((w+tw-1)/tw), int((h+tl-1)/tl)
 		need = uint64(p.across) * uint64(p.down)
 	} else {
+		if rps == 0 {
+			return nil, e.Corrupt("rows per strip")
+		}
 		p.RowsPerStrip = int(min(rps, h))
 		p.nStrips = int((h + uint64(p.RowsPerStrip) - 1) / uint64(p.RowsPerStrip))
 		need = uint64(p.nStrips)

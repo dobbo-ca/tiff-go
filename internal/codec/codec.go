@@ -67,9 +67,13 @@ func New(ctx context.Context, src *io.SectionReader, p Params) (RowReader, error
 		if p.SPP != 1 || p.BPS != 1 {
 			return nil, e.Unsupported("ccitt with %d samples of %d bits", p.SPP, p.BPS)
 		}
-		sf, opts := ccitt.Group4, &ccitt.Options{Invert: p.Photometric == ifd.WhiteIsZero}
+		// libtiff hands back the decoded bits as they are, whatever the photometric.
+		sf, opts := ccitt.Group4, &ccitt.Options{Invert: true}
 		if p.Compression == ifd.CCITT3 {
-			sf, opts.Align = ccitt.Group3, p.T4&4 != 0
+			if p.T4&5 != 0 { // 2-D coding, EOL fill bits: x/image/ccitt cannot read either
+				return nil, e.Unsupported("group 3 options %d", p.T4)
+			}
+			sf = ccitt.Group3
 		}
 		return stream{ccitt.NewReader(br, ccitt.MSB, sf, p.W, p.H, opts)}, nil
 	case ifd.JPEG:

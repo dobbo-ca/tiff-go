@@ -231,8 +231,8 @@ func TestCCITT(t *testing.T) {
 		}
 		data = append(data, v)
 	}
-	// ccitt delivers 1 = white; BlackIsZero keeps that, WhiteIsZero flips it.
-	for photo, want := range map[int][]byte{1: {0xff, 0x00, 0x00}, 0: {0x00, 0xff, 0xff}} {
+	// libtiff returns the decoded bits as they are, whatever the photometric.
+	for photo, want := range map[int][]byte{1: {0x00, 0xff, 0xff}, 0: {0x00, 0xff, 0xff}} {
 		p := fixture.Page{W: 8, H: 3, SPP: 1, BPS: 1, Photometric: photo, Compression: 4, Chunks: [][]byte{data}}
 		b := fixture.File{Pages: []fixture.Page{p}}.Bytes()
 		got, _, err := decode(t, b, tiff.Limits{}, 0)

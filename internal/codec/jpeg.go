@@ -49,6 +49,9 @@ func newJPEG(ctx context.Context, src *io.SectionReader, p Params) (RowReader, e
 		return nil, &e.LimitError{Name: "band bytes", Got: px * int64(p.W), Max: p.BandBytes}
 	}
 	j.bandRows = int(min(int64(p.H), p.BandBytes/(px*int64(p.W))))
+	if j.bandRows < j.h && progressive(b) { // jpeg-go decodes the whole frame per band
+		return nil, e.Unsupported("progressive jpeg larger than a band")
+	}
 	return j, nil
 }
 
@@ -84,4 +87,22 @@ func (j *jpegRows) ReadRow(dst []byte) error {
 	}
 	j.next++
 	return nil
+}
+
+// progressive reports whether the first frame header in b is SOF2.
+func progressive(b []byte) bool {
+	for i := 2; i+4 <= len(b); {
+		if b[i] != 0xff {
+			return false
+		}
+		switch b[i+1] {
+		case 0xc2:
+			return true
+		case 0xc0, 0xc1, 0xda:
+			return false
+		default:
+			i += 2 + int(b[i+2])<<8 + int(b[i+3])
+		}
+	}
+	return false
 }

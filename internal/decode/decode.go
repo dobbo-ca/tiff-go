@@ -91,6 +91,9 @@ func tiles(ctx context.Context, p *ifd.Page, rb, bandBytes int64, fn func(y int,
 	if got := int64(min(p.TileL, p.Height)) * rb; got > bandBytes {
 		return &e.LimitError{Name: "band bytes", Got: got, Max: bandBytes}
 	}
+	if trb > bandBytes {
+		return &e.LimitError{Name: "band bytes", Got: trb, Max: bandBytes}
+	}
 	buf := make([]byte, int64(min(p.TileL, p.Height))*rb)
 	tmp := make([]byte, trb)
 	for ty := 0; ty < p.Chunks()/p.TilesAcross(); ty++ {
