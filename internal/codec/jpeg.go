@@ -49,8 +49,8 @@ func newJPEG(ctx context.Context, src *io.SectionReader, p Params) (RowReader, e
 		return nil, &e.LimitError{Name: "band bytes", Got: px * int64(p.W), Max: p.BandBytes}
 	}
 	j.bandRows = int(min(int64(p.H), p.BandBytes/(px*int64(p.W))))
-	if j.bandRows < j.h && progressive(b) { // jpeg-go decodes the whole frame per band
-		return nil, e.Unsupported("progressive jpeg larger than a band")
+	if j.bandRows < j.h && !bandable(b) { // jpeg-go decodes the whole frame per band
+		return nil, e.Unsupported("jpeg larger than a band that is not baseline interleaved")
 	}
 	return j, nil
 }
@@ -89,20 +89,38 @@ func (j *jpegRows) ReadRow(dst []byte) error {
 	return nil
 }
 
-// progressive reports whether the first frame header in b is SOF2.
-func progressive(b []byte) bool {
-	for i := 2; i+4 <= len(b); {
+// bandable reports whether jpeg-go can decode b a band at a time: a baseline
+// frame that is single-component or whose first scan carries every component
+// (the same gate as jpeg-go; otherwise each band re-decodes the whole frame).
+// Extra 0xFF fill bytes before a marker are skipped, as the decoder does.
+func bandable(b []byte) bool {
+	n := 0 // frame components, 0 until SOF is seen
+	for i := 2; i < len(b); {
 		if b[i] != 0xff {
 			return false
 		}
-		switch b[i+1] {
-		case 0xc2:
-			return true
-		case 0xc0, 0xc1, 0xda:
-			return false
-		default:
-			i += 2 + int(b[i+2])<<8 + int(b[i+3])
+		for i < len(b) && b[i] == 0xff {
+			i++
 		}
+		if i+3 > len(b) {
+			return false
+		}
+		m, l := b[i], int(b[i+1])<<8+int(b[i+2])
+		if m == 0xc0 || m == 0xc1 { // baseline / extended sequential
+			if i+9 > len(b) {
+				return false
+			}
+			n = int(b[i+8])
+			if n == 0 {
+				return false
+			}
+		} else if m >= 0xc2 && m <= 0xcf && m != 0xc4 && m != 0xc8 && m != 0xcc {
+			return false // progressive, lossless, arithmetic
+		}
+		if m == 0xda { // first scan
+			return n == 1 || (n > 0 && i+3 < len(b) && int(b[i+3]) == n)
+		}
+		i += 1 + l
 	}
 	return false
 }
