@@ -2,6 +2,7 @@ package tiff_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"slices"
 	"testing"
@@ -112,6 +113,41 @@ func TestOrientationEntriesAnyOrder(t *testing.T) {
 		}
 		if p := page0(t, oobTIFF(big, 274, 8, 1, 6), tiff.Limits{}); len(p.Orientations) != 1 || !p.Orientations[0].BadType {
 			t.Fatalf("lone sshort: %+v", p.Orientations)
+		}
+	}
+}
+
+func TestResolutionEntries(t *testing.T) {
+	le := binary.LittleEndian
+	rat := func(n, d uint32) []byte { return le.AppendUint32(le.AppendUint32(nil, n), d) }
+	for _, big := range []bool{false, true} {
+		// classic stores a RATIONAL at an offset past the IFD, BigTIFF inline
+		build := func(x, y []byte, more ...[4]uint64) []byte {
+			val := func(r []byte, off uint64) uint64 {
+				if big {
+					return le.Uint64(r)
+				}
+				return off
+			}
+			b := oobTIFF(big, 282, 5, 1, 0, append([][4]uint64{{283, 5, 1, 0}, {296, 3, 1, 3}}, more...)...)
+			b = oobTIFF(big, 282, 5, 1, val(x, uint64(len(b))), append([][4]uint64{{283, 5, 1, val(y, uint64(len(b))+8)}, {296, 3, 1, 3}}, more...)...)
+			if !big {
+				b = append(append(b, x...), y...)
+			}
+			return b
+		}
+		got := page0(t, build(rat(300, 1), rat(7, 2)), tiff.Limits{}).Info()
+		if got.XResolution != 300 || got.YResolution != 3.5 || got.ResolutionUnit != 3 {
+			t.Fatalf("big=%v %+v", big, got)
+		}
+		got = page0(t, build(rat(300, 0), rat(7, 2)), tiff.Limits{}).Info()
+		if got.XResolution != 0 || got.YResolution != 3.5 {
+			t.Fatalf("zero denominator big=%v %+v", big, got)
+		}
+		b := oobTIFF(big, 282, 5, 1<<62, 1<<62, [4]uint64{296, 3, 1 << 30, 0})
+		got = page0(t, b, tiff.Limits{}).Info()
+		if got.XResolution != 0 || got.ResolutionUnit != 2 {
+			t.Fatalf("out of range big=%v %+v", big, got)
 		}
 	}
 }

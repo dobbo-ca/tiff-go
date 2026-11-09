@@ -42,6 +42,8 @@ type Page struct {
 	JPEGTables               []byte
 	Skipped                  []uint16 // tags dropped for a count or offset outside the file; a later valid duplicate is read instead and not listed
 	Orientations, XMPs       []Meta   // every Orientation and XMP entry, in file order
+	XRes, YRes               float64  // XResolution, YResolution; 0 when absent or not one valid RATIONAL
+	ResUnit                  int      // ResolutionUnit, 2 (inch) when absent or not a SHORT
 	TileW, TileL             int      // zero for strips
 	RowsPerStrip             int
 	Offsets, Counts          Entry
@@ -293,6 +295,12 @@ func (f *File) Page(i int, maxPixels, maxMeta int64) (*Page, error) {
 	if !ok1 || !ok2 || p.Offsets.bad || p.Counts.bad || p.Offsets.Count < need || p.Counts.Count < need {
 		return nil, e.Corrupt("chunk table")
 	}
+	p.XRes, p.YRes, p.ResUnit = f.rat(m[282]), f.rat(m[283]), 2
+	if en, ok := m[296]; ok && en.Type == 3 && en.Count > 0 && !en.bad {
+		if u, err := f.Val(en, 0); err == nil {
+			p.ResUnit = int(u)
+		}
+	}
 	if p.Orientations, p.XMPs, err = f.meta(tagged, maxMeta); err != nil {
 		return nil, err
 	}
@@ -307,4 +315,22 @@ func (f *File) Page(i int, maxPixels, maxMeta int64) (*Page, error) {
 // RowBytes is the packed size of one full-width row.
 func (p *Page) RowBytes() int64 {
 	return (int64(p.Width)*int64(p.SPP)*int64(p.BPS) + 7) / 8
+}
+
+// rat returns a single RATIONAL entry's value, or 0 when the entry is absent,
+// of another type or count, outside the file, unreadable or has a zero
+// denominator.
+func (f *File) rat(en Entry) float64 {
+	if en.Type != 5 || en.Count != 1 || en.bad {
+		return 0
+	}
+	b, err := f.Bytes(en)
+	if err != nil {
+		return 0
+	}
+	d := f.bo.Uint32(b[4:])
+	if d == 0 {
+		return 0
+	}
+	return float64(f.bo.Uint32(b)) / float64(d)
 }
