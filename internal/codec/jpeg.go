@@ -29,6 +29,9 @@ type jpegRows struct {
 func jpegBudget(band int64) int64 { return 4*band + 1<<20 }
 
 func newJPEG(ctx context.Context, src *io.SectionReader, p Params) (RowReader, error) {
+	if p.SPP == 4 {
+		return newJPEG4(ctx, src, p)
+	}
 	if p.SPP != 1 && p.SPP != 3 {
 		return nil, e.Unsupported("jpeg with %d samples", p.SPP)
 	}

@@ -9,8 +9,8 @@
 //
 // Samples are delivered packed as stored, rows padded to a byte, 16-bit
 // samples big-endian, predictor undone. JPEG-compressed data comes back as
-// 8-bit grey or RGB (YCbCr converted). The Photometric in Info says how to
-// read the samples; ColorMap carries a palette.
+// 8-bit grey, RGB (YCbCr converted) or four samples as stored (CMYK). The Photometric in Info says
+// how to read the samples; ColorMap carries a palette.
 //
 // Supported: classic and BigTIFF, either byte order; none, PackBits, LZW,
 // Deflate, CCITT G3/G4 and JPEG compression; predictor 2 at 8 and 16 bits;
