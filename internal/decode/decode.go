@@ -4,6 +4,7 @@ package decode
 import (
 	"context"
 	"encoding/binary"
+	"io"
 
 	"github.com/dobbo-ca/tiff-go/internal/codec"
 	"github.com/dobbo-ca/tiff-go/internal/e"
@@ -58,26 +59,35 @@ func Rows(ctx context.Context, p *ifd.Page, bandBytes int64, fn func(y int, rows
 		if err != nil {
 			return err
 		}
-		rr, err := codec.New(ctx, p.F.Section(off, n), params(p, p.Width, rows, bandBytes))
-		if err != nil {
-			return err
-		}
-		for done := 0; done < rows; {
-			if err := ctx.Err(); err != nil {
+		err = func() error {
+			rr, err := codec.New(ctx, p.F.Section(off, n), params(p, p.Width, rows, bandBytes))
+			if err != nil {
 				return err
 			}
-			k := min(int64(rows-done), int64(len(buf))/rb)
-			for r := int64(0); r < k; r++ {
-				row := buf[r*rb : (r+1)*rb]
-				if err := rr.ReadRow(row); err != nil {
+			if c, ok := rr.(io.Closer); ok {
+				defer c.Close() // a jpeg-go reader holds budget until closed
+			}
+			for done := 0; done < rows; {
+				if err := ctx.Err(); err != nil {
 					return err
 				}
-				fix(p, row, p.Width)
+				k := min(int64(rows-done), int64(len(buf))/rb)
+				for r := int64(0); r < k; r++ {
+					row := buf[r*rb : (r+1)*rb]
+					if err := rr.ReadRow(row); err != nil {
+						return err
+					}
+					fix(p, row, p.Width)
+				}
+				if err := fn(y0+done, buf[:k*rb]); err != nil {
+					return err
+				}
+				done += int(k)
 			}
-			if err := fn(y0+done, buf[:k*rb]); err != nil {
-				return err
-			}
-			done += int(k)
+			return nil
+		}()
+		if err != nil {
+			return err
 		}
 	}
 	return nil
@@ -107,17 +117,26 @@ func tiles(ctx context.Context, p *ifd.Page, rb, bandBytes int64, fn func(y int,
 			if err != nil {
 				return err
 			}
-			rr, err := codec.New(ctx, p.F.Section(off, n), params(p, p.TileW, p.TileL, bandBytes))
-			if err != nil {
-				return err
-			}
-			xoff := int64(tx) * trb // tile widths are byte-aligned (checked at parse)
-			for r := 0; r < rows; r++ {
-				if err := rr.ReadRow(tmp); err != nil {
+			err = func() error {
+				rr, err := codec.New(ctx, p.F.Section(off, n), params(p, p.TileW, p.TileL, bandBytes))
+				if err != nil {
 					return err
 				}
-				fix(p, tmp, p.TileW)
-				copy(buf[int64(r)*rb+xoff:int64(r+1)*rb], tmp)
+				if c, ok := rr.(io.Closer); ok {
+					defer c.Close()
+				}
+				xoff := int64(tx) * trb // tile widths are byte-aligned (checked at parse)
+				for r := 0; r < rows; r++ {
+					if err := rr.ReadRow(tmp); err != nil {
+						return err
+					}
+					fix(p, tmp, p.TileW)
+					copy(buf[int64(r)*rb+xoff:int64(r+1)*rb], tmp)
+				}
+				return nil
+			}()
+			if err != nil {
+				return err
 			}
 		}
 		if err := fn(y0, buf[:int64(rows)*rb]); err != nil {

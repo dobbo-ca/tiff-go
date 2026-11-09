@@ -63,7 +63,12 @@ func newJPEG(ctx context.Context, src *io.SectionReader, p Params) (RowReader, e
 	if _, err := src.ReadAt(b, 0); err != nil && err != io.EOF {
 		return nil, err
 	}
-	cfg, err := jpeg.DecodeConfigLimits(b, p.JPEGTables, jpeg.Limits{MaxBytes: jpegBudget(p.BandBytes)})
+	lim := jpeg.Limits{MaxBytes: jpegBudget(p.BandBytes)}
+	band := bandable(b)
+	if !band {
+		lim = jpeg.Limits{} // the row reader is bounded by its own need, not a band
+	}
+	cfg, err := jpeg.DecodeConfigLimits(b, p.JPEGTables, lim)
 	if err != nil {
 		return nil, jpegErr(err, "jpeg header")
 	}
@@ -80,13 +85,61 @@ func newJPEG(ctx context.Context, src *io.SectionReader, p Params) (RowReader, e
 		return nil, &e.LimitError{Name: "band bytes", Got: px * int64(p.W), Max: p.BandBytes}
 	}
 	j.bandRows = int(min(int64(p.H), p.BandBytes/(px*int64(p.W))))
-	if j.bandRows < j.h && !bandable(b) {
-		// jpeg-go decodes the whole frame for every band: its coefficient and plane
-		// buffers run to 17 bytes a pixel (4:4:4), past the band budget. Open's MaxPixels
-		// bounds the frame before this allocation.
-		j.opts.Limits.MaxBytes = max(j.opts.Limits.MaxBytes, 20*int64(p.W)*int64(p.H))
+	if !band {
+		// jpeg-go would decode the whole frame for every band: hold the coefficients once
+		// and take rows from a reader, whose need jpeg-go reserves and checks before it allocates.
+		need, err := jpeg.RowReaderNeed(b, p.JPEGTables)
+		if err != nil {
+			return nil, jpegErr(err, "jpeg header")
+		}
+		rr, err := jpeg.NewRowReader(ctx, b, p.JPEGTables, jpeg.Limits{MaxBytes: need + 1<<17}) // MaxBytes also counts page rounding, under 128 KiB
+		if err != nil {
+			return nil, jpegErr(err, "jpeg data")
+		}
+		if rr.Truncated() {
+			rr.Close()
+			return nil, e.Corrupt("jpeg data")
+		}
+		return &jpegProgRows{rr: rr, w: p.W, h: p.H, gray: p.SPP == 1}, nil
 	}
 	return j, nil
+}
+
+// jpegProgRows hands out a frame's rows from one jpeg-go RowReader, which holds
+// the frame's coefficients (and its budget reservation) until Close.
+type jpegProgRows struct {
+	rr   *jpeg.RowReader
+	cur  *image.RGBA
+	w, h int
+	next int
+	gray bool
+}
+
+func (j *jpegProgRows) Close() error { return j.rr.Close() }
+
+func (j *jpegProgRows) ReadRow(dst []byte) error {
+	if j.next >= j.h {
+		return e.Corrupt("jpeg rows")
+	}
+	if j.cur == nil || j.next >= j.cur.Rect.Max.Y {
+		m, err := j.rr.Next()
+		if err != nil {
+			return jpegErr(err, "jpeg data")
+		}
+		j.cur = m
+	}
+	s := j.cur.Pix[j.cur.PixOffset(j.cur.Rect.Min.X, j.next):]
+	if j.gray {
+		for i := 0; i < j.w; i++ {
+			dst[i] = s[4*i]
+		}
+	} else {
+		for i := 0; i < j.w; i++ {
+			dst[3*i], dst[3*i+1], dst[3*i+2] = s[4*i], s[4*i+1], s[4*i+2]
+		}
+	}
+	j.next++
+	return nil
 }
 
 func (j *jpegRows) ReadRow(dst []byte) error {
