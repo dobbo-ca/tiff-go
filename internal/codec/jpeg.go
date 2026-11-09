@@ -3,6 +3,7 @@ package codec
 import (
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"io"
 
@@ -29,11 +30,24 @@ type jpegRows struct {
 // a few times the decoded band, and its allocation is charged in 8 KiB pages.
 func jpegBudget(band int64) int64 { return 4*band + 1<<20 }
 
-// jpegErr maps a jpeg-go failure: a refused Limits is a *e.LimitError, the rest is corruption.
+// jpegErr maps a jpeg-go failure: a refused Limits, process memory limit or 1 GiB
+// cap is a *e.LimitError; a decode that lost the shared budget stays as it is
+// (transient, wraps the context error); the rest is corruption.
 func jpegErr(err error, what string) error {
 	var le *jpeg.LimitError
 	if errors.As(err, &le) {
 		return &e.LimitError{Name: "jpeg " + le.Name, Got: le.Got, Max: le.Max}
+	}
+	if errors.Is(err, jpeg.ErrMemoryLimit) {
+		return err
+	}
+	// ponytail: jpeg-go has no typed error for these two; upgrade when it does.
+	var need, max int64
+	if _, serr := fmt.Sscanf(err.Error(), "jpeg: decode needs %d bytes, over the %d byte memory limit", &need, &max); serr == nil {
+		return &e.LimitError{Name: "jpeg memory", Got: need, Max: max}
+	}
+	if _, serr := fmt.Sscanf(err.Error(), "jpeg: decode needs %d bytes, over the 1 GiB cap", &need); serr == nil {
+		return &e.LimitError{Name: "jpeg memory", Got: need, Max: 1 << 30}
 	}
 	return e.Corrupt("%s", what)
 }

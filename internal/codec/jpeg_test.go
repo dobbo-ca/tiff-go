@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"io"
 	"testing"
@@ -76,5 +77,42 @@ func TestJPEGLimitIsNotCorrupt(t *testing.T) {
 	var le *e.LimitError
 	if !errors.As(err, &le) || errors.Is(err, e.ErrCorrupt) {
 		t.Fatalf("got %v, want *LimitError", err)
+	}
+}
+
+// jpeg-go's process memory limit and 1 GiB cap are limits too, not corruption;
+// a decode refused because other decodes hold the budget is transient, so it is neither.
+func TestJPEGProcessLimitIsNotCorrupt(t *testing.T) {
+	var buf bytes.Buffer
+	if err := jpeg.Encode(context.Background(), &buf, image.NewGray(image.Rect(0, 0, 256, 256)), nil); err != nil {
+		t.Fatal(err)
+	}
+	b := buf.Bytes()
+	p := Params{SPP: 1, W: 256, H: 256, BandBytes: 256 * 256}
+	prev := jpeg.SetMemoryLimit(1024)
+	defer jpeg.SetMemoryLimit(prev)
+	r, err := newJPEG(context.Background(), io.NewSectionReader(bytes.NewReader(b), 0, int64(len(b))), p)
+	if err == nil {
+		err = r.ReadRow(make([]byte, 256))
+	}
+	var le *e.LimitError
+	if !errors.As(err, &le) || errors.Is(err, e.ErrCorrupt) {
+		t.Fatalf("process limit: got %v, want *LimitError", err)
+	}
+
+	const w, h = 30000, 30000 // progressive planes alone are over the 1 GiB cap
+	big := []byte{0xff, 0xd8, 0xff, 0xc2, 0, 17, 8, h >> 8, h & 255, w >> 8, w & 255, 3, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0, 0xff, 0xda, 0, 12, 3, 1, 0, 2, 0, 3, 0, 0, 0, 0}
+	jpeg.SetMemoryLimit(prev)
+	r, err = newJPEG(context.Background(), io.NewSectionReader(bytes.NewReader(big), 0, int64(len(big))), Params{SPP: 3, W: w, H: h, BandBytes: 1 << 40})
+	if err == nil {
+		err = r.ReadRow(make([]byte, 3*w))
+	}
+	if !errors.As(err, &le) || errors.Is(err, e.ErrCorrupt) {
+		t.Fatalf("1 GiB cap: got %v, want *LimitError", err)
+	}
+
+	err = jpegErr(fmt.Errorf("jpeg: %w: %w", context.Canceled, jpeg.ErrMemoryLimit), "jpeg data")
+	if errors.As(err, &le) || errors.Is(err, e.ErrCorrupt) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("transient: got %v, want the context error", err)
 	}
 }
