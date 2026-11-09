@@ -66,8 +66,9 @@ func TestBandable(t *testing.T) {
 // A jpeg-go budget refusal is a limit, not corruption (kleio parks them apart).
 func TestJPEGLimitIsNotCorrupt(t *testing.T) {
 	const w, h = 2048, 2048
-	// SOI, SOF2, SOS: a progressive frame with no entropy data. Its coefficient
-	// planes are charged at SOF, before any data, and outrun the one-band budget.
+	// SOI, SOF2, SOS: a progressive frame with no entropy data. The row reader reserves
+	// its coefficients at SOF, before any data, and the process limit refuses them.
+	defer jpeg.SetMemoryLimit(jpeg.SetMemoryLimit(1 << 20))
 	b := []byte{0xff, 0xd8, 0xff, 0xc2, 0, 17, 8, h >> 8, h & 255, w >> 8, w & 255, 3, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0, 0xff, 0xda, 0, 12, 3, 1, 0, 2, 0, 3, 0, 0, 0, 0}
 	p := Params{SPP: 3, W: w, H: h, BandBytes: 4 * w * h}
 	r, err := newJPEG(context.Background(), io.NewSectionReader(bytes.NewReader(b), 0, int64(len(b))), p)

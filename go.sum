@@ -2,5 +2,7 @@ github.com/dobbo-ca/deflate-go v0.4.0 h1:nOFsDLonaAlafQBr0sKIO9hhOCGgzw8GqPaziiS
 github.com/dobbo-ca/deflate-go v0.4.0/go.mod h1:4crReZIy+v7rkTas/x4pJC2OCMLgSTHArR89vUn4gSs=
 github.com/dobbo-ca/jpeg-go v0.7.0 h1:Wu/2kgd43xx4r2fsieqTkmB7ZmCJxRHfYzd/YFLgAnk=
 github.com/dobbo-ca/jpeg-go v0.7.0/go.mod h1:9/XuoqEPO9n3BgqJz/CWk3lCfFOKgGVyOdEB/vLfAiw=
+github.com/dobbo-ca/jpeg-go v0.8.0 h1:YcZpkJpYDeN+fE24W424Z/C+FInby5aRPiq6XCg/3hs=
+github.com/dobbo-ca/jpeg-go v0.8.0/go.mod h1:9/XuoqEPO9n3BgqJz/CWk3lCfFOKgGVyOdEB/vLfAiw=
 golang.org/x/image v0.47.0 h1:za/8gVz++PPZqmZJBNSISICN5Rrj5zixP/8K++fgmqo=
 golang.org/x/image v0.47.0/go.mod h1:IkN5o4A7vq55vXN8FWjjnhg9Rs2GOtffqsSi9mWAKYE=
