@@ -1,6 +1,7 @@
 package ifd
 
 import (
+	"math"
 	"slices"
 
 	"github.com/dobbo-ca/tiff-go/internal/e"
@@ -40,6 +41,7 @@ type Page struct {
 	ExtraSamples             []uint16
 	JPEGTables               []byte
 	Skipped                  []uint16 // tags dropped for a count or offset outside the file; a later valid duplicate is read instead and not listed
+	Orientations, XMPs       []Meta   // every Orientation and XMP entry, in file order
 	TileW, TileL             int      // zero for strips
 	RowsPerStrip             int
 	Offsets, Counts          Entry
@@ -68,9 +70,64 @@ func (f *File) one(m map[uint16]Entry, tag uint16, def uint64) (uint64, error) {
 	return f.Val(en, 0)
 }
 
-// Page parses IFD i. maxPixels caps Width*Height.
-func (f *File) Page(i int, maxPixels int64) (*Page, error) {
-	m, skipped, err := f.entries(f.Offs[i])
+// Meta is one Orientation or XMP entry as stored.
+type Meta struct {
+	Type  uint16
+	Count uint64
+	// Value is an Orientation's first element, saturated at MaxInt32; 0 when
+	// it was not read.
+	Value int
+	// Data is an XMP value; nil when it was not read.
+	Data []byte
+	// OutOfRange: count or offset lies outside the file. BadType: not a type
+	// the tag may have. OverLimit: Data exceeds the metadata budget.
+	// Duplicate: the page holds more than one entry of this tag.
+	OutOfRange, BadType, OverLimit, Duplicate bool
+}
+
+// meta lists the tagged entries. XMP bytes read in total stay within budget.
+func (f *File) meta(tagged []Entry, budget int64) (or, xmp []Meta, err error) {
+	var n [2]int // entries per tag: 274, 700
+	for _, en := range tagged {
+		n[en.Tag/700]++
+	}
+	for _, en := range tagged {
+		x := en.Tag == 700
+		m := Meta{Type: en.Type, Count: en.Count, OutOfRange: en.bad, Duplicate: n[en.Tag/700] > 1}
+		ok := slices.Contains([]uint16{1, 3, 4, 16}, en.Type)
+		if x {
+			ok = slices.Contains([]uint16{1, 2, 7}, en.Type)
+		}
+		m.BadType = !ok
+		switch {
+		case m.OutOfRange || m.BadType:
+		case x && en.Count > uint64(budget):
+			m.OverLimit = true
+		case x:
+			budget -= int64(en.Count)
+			if m.Data, err = f.Bytes(en); err != nil {
+				return
+			}
+		case en.Count > 0:
+			var v uint64
+			if v, err = f.Val(en, 0); err != nil {
+				return
+			}
+			m.Value = int(min(v, math.MaxInt32))
+		}
+		if x {
+			xmp = append(xmp, m)
+		} else {
+			or = append(or, m)
+		}
+	}
+	return
+}
+
+// Page parses IFD i. maxPixels caps Width*Height; maxMeta caps the XMP bytes
+// read.
+func (f *File) Page(i int, maxPixels, maxMeta int64) (*Page, error) {
+	m, skipped, tagged, err := f.entries(f.Offs[i])
 	if err != nil {
 		return nil, err
 	}
@@ -232,6 +289,9 @@ func (f *File) Page(i int, maxPixels int64) (*Page, error) {
 	p.Counts, ok2 = m[cntTag]
 	if !ok1 || !ok2 || p.Offsets.bad || p.Counts.bad || p.Offsets.Count < need || p.Counts.Count < need {
 		return nil, e.Corrupt("chunk table")
+	}
+	if p.Orientations, p.XMPs, err = f.meta(tagged, maxMeta); err != nil {
+		return nil, err
 	}
 	for _, t := range skipped {
 		if m[t].bad && !slices.Contains(p.Skipped, t) {

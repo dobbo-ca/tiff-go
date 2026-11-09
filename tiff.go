@@ -22,17 +22,19 @@ type LimitError = e.LimitError
 
 // Defaults applied to zero Limits fields.
 const (
-	DefaultMaxIFDs      = 10000
-	DefaultMaxPixels    = 178956970 // kleio's upload ceiling, per IFD
-	DefaultMaxBandBytes = 64 << 20
+	DefaultMaxIFDs          = 10000
+	DefaultMaxPixels        = 178956970 // kleio's upload ceiling, per IFD
+	DefaultMaxBandBytes     = 64 << 20
+	DefaultMaxMetadataBytes = 4 << 20
 )
 
 // Limits caps what one File may cost. The zero value is safe: every zero
 // field takes its default.
 type Limits struct {
-	MaxIFDs      int   // directories in the chain
-	MaxPixels    int64 // Width*Height of one IFD
-	MaxBandBytes int64 // decoded bytes buffered at once
+	MaxIFDs          int   // directories in the chain
+	MaxPixels        int64 // Width*Height of one IFD
+	MaxBandBytes     int64 // decoded bytes buffered at once
+	MaxMetadataBytes int64 // XMP bytes read per page, summed over its entries
 }
 
 func (l Limits) withDefaults() Limits {
@@ -44,6 +46,9 @@ func (l Limits) withDefaults() Limits {
 	}
 	if l.MaxBandBytes <= 0 {
 		l.MaxBandBytes = DefaultMaxBandBytes
+	}
+	if l.MaxMetadataBytes <= 0 {
+		l.MaxMetadataBytes = DefaultMaxMetadataBytes
 	}
 	return l
 }
@@ -81,11 +86,11 @@ func (f *File) Page(i int) (*Page, error) {
 	if i < 0 || i >= f.NumPages() {
 		return nil, e.Corrupt("page %d out of range", i)
 	}
-	p, err := f.f.Page(i, f.lim.MaxPixels)
+	p, err := f.f.Page(i, f.lim.MaxPixels, f.lim.MaxMetadataBytes)
 	if err != nil {
 		return nil, err
 	}
-	return &Page{p: p, lim: f.lim}, nil
+	return &Page{p: p, lim: f.lim, Orientations: p.Orientations, XMPs: p.XMPs}, nil
 }
 
 // Info describes a page's samples.
@@ -105,10 +110,20 @@ type Info struct {
 	Skipped []uint16
 }
 
+// TagEntry is one Orientation or XMP entry as stored. Value is an
+// Orientation's first element (saturated at MaxInt32), Data an XMP value; each
+// is empty when the entry is OutOfRange, a BadType, or (Data) OverLimit of
+// Limits.MaxMetadataBytes. Duplicate is true on every entry when the page has
+// more than one of the tag.
+type TagEntry = ifd.Meta
+
 // Page is one parsed directory.
 type Page struct {
-	p   *ifd.Page
-	lim Limits
+	// Orientations and XMPs list every Orientation (274) and XMP (700) entry
+	// in file order, including those Info().Skipped.
+	Orientations, XMPs []TagEntry
+	p                  *ifd.Page
+	lim                Limits
 }
 
 // Info returns the page's description.
