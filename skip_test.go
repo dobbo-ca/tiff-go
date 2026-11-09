@@ -13,7 +13,7 @@ import (
 
 // oobTIFF is a 1x1 8-bit grey TIFF, classic or BigTIFF, plus one extra tag
 // whose count and value field are written as given.
-func oobTIFF(big bool, tag, typ uint16, count, val uint64) []byte {
+func oobTIFF(big bool, tag, typ uint16, count, val uint64, more ...[4]uint64) []byte {
 	le := binary.LittleEndian
 	var b []byte
 	if big {
@@ -30,6 +30,7 @@ func oobTIFF(big bool, tag, typ uint16, count, val uint64) []byte {
 	}
 	tags := [][4]uint64{{256, 4, 1, 1}, {257, 4, 1, 1}, {258, 3, 1, 8}, {262, 3, 1, 1},
 		{273, 4, 1, data}, {278, 4, 1, 1}, {279, 4, 1, 1}, {uint64(tag), uint64(typ), count, val}}
+	tags = append(tags, more...)
 	if big {
 		b = le.AppendUint64(b, uint64(len(tags)))
 	} else {
@@ -56,7 +57,15 @@ func TestSkippedOutOfRangeTags(t *testing.T) {
 		"LONG8": 16, "SLONG8": 17, "IFD8": 18}
 	for name, typ := range types {
 		for _, big := range []bool{false, true} {
-			for kind, cv := range map[string][2]uint64{"count": {1 << 30, 0}, "offset": {100, 1 << 20}} {
+			vw := uint64(4)
+			if big {
+				vw = 8
+			}
+			sz := map[uint16]uint64{1: 1, 2: 1, 6: 1, 7: 1, 3: 2, 8: 2, 4: 4, 9: 4, 11: 4, 13: 4}[typ]
+			if sz == 0 {
+				sz = 8
+			}
+			for kind, cv := range map[string][2]uint64{"count": {1 << 30, 0}, "offset": {vw/sz + 1, 1 << 20}} {
 				t.Run(fmt.Sprintf("%s/big=%v/%s", name, big, kind), func(t *testing.T) {
 					b := oobTIFF(big, 700, typ, cv[0], cv[1])
 					got, _, err := decode(t, b, tiff.Limits{}, 0)
@@ -93,5 +102,32 @@ func TestOutOfRangeNeededTagStaysCorrupt(t *testing.T) {
 				t.Fatalf("big=%v %v: %v", big, c, err)
 			}
 		}
+	}
+}
+
+// Tags the page does not read are skipped even when decode-relevant in
+// general: ColorMap without Palette, JPEGTables without JPEG, tile tables on a
+// strip file, CCITT options on an uncompressed file, SampleFormat.
+func TestSkippedTagsThisPageDoesNotRead(t *testing.T) {
+	for _, big := range []bool{false, true} {
+		for _, tag := range []uint16{320, 347, 292, 293, 324, 325, 339} {
+			for _, cv := range [][2]uint64{{1 << 30, 0}, {3, 1 << 20}} {
+				b := oobTIFF(big, tag, 4, cv[0], cv[1])
+				got, _, err := decode(t, b, tiff.Limits{}, 0)
+				if err != nil || !bytes.Equal(got, []byte{7}) {
+					t.Fatalf("big=%v tag %d %v: %v %v", big, tag, cv, got, err)
+				}
+			}
+		}
+	}
+}
+
+func TestDuplicateOrientationLastWins(t *testing.T) {
+	// a valid Orientation=6 followed by an out-of-range one reads as 1 and is skipped.
+	b := oobTIFF(false, 274, 3, 1, 6, [4]uint64{274, 3, 1 << 30, 0})
+	f, _ := tiff.Open(bytes.NewReader(b), int64(len(b)), tiff.Limits{})
+	p, err := f.Page(0)
+	if err != nil || p.Info().Orientation != 1 || !slices.Equal(p.Info().Skipped, []uint16{274}) {
+		t.Fatalf("%v %+v", err, p.Info())
 	}
 }

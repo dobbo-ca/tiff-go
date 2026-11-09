@@ -55,7 +55,7 @@ func (p *Page) TilesAcross() int { return p.across }
 
 func (f *File) one(m map[uint16]Entry, tag uint16, def uint64) (uint64, error) {
 	en, ok := m[tag]
-	if !ok {
+	if !ok || (tag == 274 && en.bad) { // a bad Orientation reads as 1
 		return def, nil
 	}
 	if en.Count != 1 {
@@ -70,7 +70,7 @@ func (f *File) Page(i int, maxPixels int64) (*Page, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &Page{F: f, Skipped: skipped}
+	p := &Page{F: f}
 	var v [12]uint64
 	for k, t := range [...]struct {
 		tag uint16
@@ -118,7 +118,7 @@ func (f *File) Page(i int, maxPixels int64) (*Page, error) {
 	if pred != 1 && pred != 2 {
 		return nil, e.Unsupported("predictor %d", pred)
 	}
-	if en, ok := m[339]; ok {
+	if en, ok := m[339]; ok && !en.bad { // a bad SampleFormat reads as unsigned
 		sf, err := f.Ints(en, 16)
 		if err != nil {
 			return nil, err
@@ -189,11 +189,16 @@ func (f *File) Page(i int, maxPixels int64) (*Page, error) {
 			return nil, err
 		}
 	}
-	if en, ok := m[292]; ok {
-		p.T4, _ = f.Val(en, 0)
+	ccitt := comp == CCITT3 || comp == CCITT4
+	if en, ok := m[292]; ok && ccitt {
+		if p.T4, err = f.Val(en, 0); en.bad {
+			return nil, err
+		}
 	}
-	if en, ok := m[293]; ok {
-		p.T6, _ = f.Val(en, 0)
+	if en, ok := m[293]; ok && ccitt {
+		if p.T6, err = f.Val(en, 0); en.bad {
+			return nil, err
+		}
 	}
 
 	offTag, cntTag := uint16(273), uint16(279)
@@ -217,8 +222,13 @@ func (f *File) Page(i int, maxPixels int64) (*Page, error) {
 	var ok1, ok2 bool
 	p.Offsets, ok1 = m[offTag]
 	p.Counts, ok2 = m[cntTag]
-	if !ok1 || !ok2 || p.Offsets.Count < need || p.Counts.Count < need {
+	if !ok1 || !ok2 || p.Offsets.bad || p.Counts.bad || p.Offsets.Count < need || p.Counts.Count < need {
 		return nil, e.Corrupt("chunk table")
+	}
+	for _, t := range skipped {
+		if m[t].bad {
+			p.Skipped = append(p.Skipped, t)
+		}
 	}
 	return p, nil
 }
