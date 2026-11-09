@@ -2,6 +2,7 @@ package codec
 
 import (
 	"context"
+	"errors"
 	"image"
 	"io"
 
@@ -28,6 +29,15 @@ type jpegRows struct {
 // a few times the decoded band, and its allocation is charged in 8 KiB pages.
 func jpegBudget(band int64) int64 { return 4*band + 1<<20 }
 
+// jpegErr maps a jpeg-go failure: a refused Limits is a *e.LimitError, the rest is corruption.
+func jpegErr(err error, what string) error {
+	var le *jpeg.LimitError
+	if errors.As(err, &le) {
+		return &e.LimitError{Name: "jpeg " + le.Name, Got: le.Got, Max: le.Max}
+	}
+	return e.Corrupt("%s", what)
+}
+
 func newJPEG(ctx context.Context, src *io.SectionReader, p Params) (RowReader, error) {
 	if p.SPP == 4 {
 		return newJPEG4(ctx, src, p)
@@ -41,7 +51,7 @@ func newJPEG(ctx context.Context, src *io.SectionReader, p Params) (RowReader, e
 	}
 	cfg, err := jpeg.DecodeConfigLimits(b, p.JPEGTables, jpeg.Limits{MaxBytes: jpegBudget(p.BandBytes)})
 	if err != nil {
-		return nil, e.Corrupt("jpeg header")
+		return nil, jpegErr(err, "jpeg header")
 	}
 	if cfg.Width != p.W || cfg.Height != p.H || cfg.Components != p.SPP {
 		return nil, e.Corrupt("jpeg frame does not match its chunk")
@@ -80,7 +90,7 @@ func (j *jpegRows) ReadRow(dst []byte) error {
 		}
 		img, err := jpeg.Decode(j.ctx, j.src, &j.opts)
 		if err != nil {
-			return e.Corrupt("jpeg data")
+			return jpegErr(err, "jpeg data")
 		}
 		j.band, j.bandEnd = img, end
 	}

@@ -3,11 +3,14 @@ package codec
 import (
 	"bytes"
 	"context"
+	"errors"
 	"image"
 	"io"
 	"testing"
 
 	"github.com/dobbo-ca/jpeg-go"
+
+	"github.com/dobbo-ca/tiff-go/internal/e"
 )
 
 // Every jpeg-go call is bounded by the band budget, never run with zero Limits.
@@ -56,5 +59,22 @@ func TestBandable(t *testing.T) {
 		if got := bandable(c.b); got != c.want {
 			t.Errorf("%s: %v", name, got)
 		}
+	}
+}
+
+// A jpeg-go budget refusal is a limit, not corruption (kleio parks them apart).
+func TestJPEGLimitIsNotCorrupt(t *testing.T) {
+	const w, h = 2048, 2048
+	// SOI, SOF2, SOS: a progressive frame with no entropy data. Its coefficient
+	// planes are charged at SOF, before any data, and outrun the one-band budget.
+	b := []byte{0xff, 0xd8, 0xff, 0xc2, 0, 17, 8, h >> 8, h & 255, w >> 8, w & 255, 3, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0, 0xff, 0xda, 0, 12, 3, 1, 0, 2, 0, 3, 0, 0, 0, 0}
+	p := Params{SPP: 3, W: w, H: h, BandBytes: 4 * w * h}
+	r, err := newJPEG(context.Background(), io.NewSectionReader(bytes.NewReader(b), 0, int64(len(b))), p)
+	if err == nil {
+		err = r.ReadRow(make([]byte, 3*w))
+	}
+	var le *e.LimitError
+	if !errors.As(err, &le) || errors.Is(err, e.ErrCorrupt) {
+		t.Fatalf("got %v, want *LimitError", err)
 	}
 }
