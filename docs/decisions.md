@@ -20,10 +20,17 @@
 8. **Refused as `ErrUnsupported`**: planar configuration 2, fill order 2, mixed
    bits per sample, sample formats other than unsigned integer, predictor 3,
    predictor 2 outside 8 and 16 bits, Lab/YCbCr outside JPEG, old-style JPEG
-   (compression 6), JPEG with 4 components, CCITT with more than 1 bit per
+   (compression 6), JPEG with 4 components that is not baseline, one interleaved
+   scan, 1x1 sampling (libtiff refuses the sampling too), CCITT with more than 1 bit per
    pixel, compression 2 (CCITT RLE).
 9. **JPEG is untested with a `JPEGTables` tag**: jpeg-go has no abbreviated
    stream writer, so the fixture writes self-contained streams. The tables
    path is a straight pass-through to `jpeg.DecodeConfig` and `DecodeOptions`.
 10. **ctx** is checked before every band (and tile); a single band is not
     interruptible.
+11. **Four-component JPEG is decoded here, not by jpeg-go**, which stops at three
+    components. `internal/codec/jpeg4.go` reads a baseline interleaved scan (Huffman,
+    libjpeg's jidctint.c IDCT) and returns the samples as stored: libtiff gives libjpeg
+    no colour space for a Separated page, so an Adobe marker's transform is ignored and
+    there is no inversion. Pillow's reading of the testdata files matches byte for byte.
+    The Huffman decode is bit by bit, which is slow on very large pages.
