@@ -1,6 +1,30 @@
 package codec
 
-import "testing"
+import (
+	"bytes"
+	"context"
+	"image"
+	"io"
+	"testing"
+
+	"github.com/dobbo-ca/jpeg-go"
+)
+
+// Every jpeg-go call is bounded by the band budget, never run with zero Limits.
+func TestJPEGCallLimited(t *testing.T) {
+	var buf bytes.Buffer
+	if err := jpeg.Encode(context.Background(), &buf, image.NewGray(image.Rect(0, 0, 64, 64)), nil); err != nil {
+		t.Fatal(err)
+	}
+	b := buf.Bytes()
+	r, err := newJPEG(context.Background(), io.NewSectionReader(bytes.NewReader(b), 0, int64(len(b))), Params{SPP: 1, W: 64, H: 64, BandBytes: 64 * 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := r.(*jpegRows).opts.Limits.MaxBytes, jpegBudget(64*64); got != want {
+		t.Fatalf("MaxBytes %d, want %d", got, want)
+	}
+}
 
 func TestBandable(t *testing.T) {
 	sof := func(m byte, n int) []byte {

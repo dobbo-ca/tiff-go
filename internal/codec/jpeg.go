@@ -24,6 +24,10 @@ type jpegRows struct {
 	bandEnd  int
 }
 
+// jpegBudget bounds one jpeg-go call: its planes and conversion buffers run to
+// a few times the decoded band, and its allocation is charged in 8 KiB pages.
+func jpegBudget(band int64) int64 { return 4*band + 1<<20 }
+
 func newJPEG(ctx context.Context, src *io.SectionReader, p Params) (RowReader, error) {
 	if p.SPP != 1 && p.SPP != 3 {
 		return nil, e.Unsupported("jpeg with %d samples", p.SPP)
@@ -32,7 +36,7 @@ func newJPEG(ctx context.Context, src *io.SectionReader, p Params) (RowReader, e
 	if _, err := src.ReadAt(b, 0); err != nil && err != io.EOF {
 		return nil, err
 	}
-	cfg, err := jpeg.DecodeConfig(b, p.JPEGTables)
+	cfg, err := jpeg.DecodeConfigLimits(b, p.JPEGTables, jpeg.Limits{MaxBytes: jpegBudget(p.BandBytes)})
 	if err != nil {
 		return nil, e.Corrupt("jpeg header")
 	}
@@ -40,7 +44,7 @@ func newJPEG(ctx context.Context, src *io.SectionReader, p Params) (RowReader, e
 		return nil, e.Corrupt("jpeg frame does not match its chunk")
 	}
 	j := &jpegRows{ctx: ctx, src: b, w: p.W, h: p.H}
-	j.opts = jpeg.DecodeOptions{Format: jpeg.FormatRGBA, Tables: p.JPEGTables}
+	j.opts = jpeg.DecodeOptions{Format: jpeg.FormatRGBA, Tables: p.JPEGTables, Limits: jpeg.Limits{MaxBytes: jpegBudget(p.BandBytes)}}
 	px := int64(4) // decoded bytes per pixel
 	if p.SPP == 1 {
 		j.opts.Format, px = jpeg.FormatGray, 1
