@@ -97,9 +97,11 @@ func TestSkippedOrientationReadsAsOne(t *testing.T) {
 func TestOutOfRangeNeededTagStaysCorrupt(t *testing.T) {
 	for _, big := range []bool{false, true} {
 		for _, c := range [][2]uint64{{1 << 30, 0}, {100, 1 << 20}} {
-			b := oobTIFF(big, 338, 3, c[0], c[1]) // ExtraSamples
-			if _, _, err := decode(t, b, tiff.Limits{}, 0); !errors.Is(err, tiff.ErrCorrupt) {
-				t.Fatalf("big=%v %v: %v", big, c, err)
+			for _, tag := range []uint16{338, 339} { // ExtraSamples, SampleFormat
+				b := oobTIFF(big, tag, 3, c[0], c[1])
+				if _, _, err := decode(t, b, tiff.Limits{}, 0); !errors.Is(err, tiff.ErrCorrupt) {
+					t.Fatalf("big=%v tag %d %v: %v", big, tag, c, err)
+				}
 			}
 		}
 	}
@@ -107,10 +109,10 @@ func TestOutOfRangeNeededTagStaysCorrupt(t *testing.T) {
 
 // Tags the page does not read are skipped even when decode-relevant in
 // general: ColorMap without Palette, JPEGTables without JPEG, tile tables on a
-// strip file, CCITT options on an uncompressed file, SampleFormat.
+// strip file, CCITT options on an uncompressed file, FillOrder.
 func TestSkippedTagsThisPageDoesNotRead(t *testing.T) {
 	for _, big := range []bool{false, true} {
-		for _, tag := range []uint16{320, 347, 292, 293, 324, 325, 339} {
+		for _, tag := range []uint16{320, 347, 292, 293, 324, 325, 266} {
 			for _, cv := range [][2]uint64{{1 << 30, 0}, {3, 1 << 20}} {
 				b := oobTIFF(big, tag, 4, cv[0], cv[1])
 				got, _, err := decode(t, b, tiff.Limits{}, 0)
@@ -129,5 +131,19 @@ func TestDuplicateOrientationLastWins(t *testing.T) {
 	p, err := f.Page(0)
 	if err != nil || p.Info().Orientation != 1 || !slices.Equal(p.Info().Skipped, []uint16{274}) {
 		t.Fatalf("%v %+v", err, p.Info())
+	}
+}
+
+func TestSkippedOnceAndTiledIgnoresRowsPerStrip(t *testing.T) {
+	b := oobTIFF(false, 700, 3, 1<<30, 0, [4]uint64{700, 3, 1 << 30, 0})
+	f, _ := tiff.Open(bytes.NewReader(b), int64(len(b)), tiff.Limits{})
+	if p, err := f.Page(0); err != nil || !slices.Equal(p.Info().Skipped, []uint16{700}) {
+		t.Fatalf("%v %+v", err, p.Info())
+	}
+	// tile tags make 278 unread: libtiff-style skip, here reported
+	b = oobTIFF(false, 278, 4, 1<<30, 0, [4]uint64{322, 4, 1, 1}, [4]uint64{323, 4, 1, 1}, [4]uint64{324, 4, 1, 8}, [4]uint64{325, 4, 1, 1})
+	f, _ = tiff.Open(bytes.NewReader(b), int64(len(b)), tiff.Limits{})
+	if p, err := f.Page(0); err != nil || !slices.Contains(p.Info().Skipped, 278) {
+		t.Fatalf("%v", err)
 	}
 }

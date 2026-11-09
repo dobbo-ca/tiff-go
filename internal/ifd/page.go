@@ -1,6 +1,10 @@
 package ifd
 
-import "github.com/dobbo-ca/tiff-go/internal/e"
+import (
+	"slices"
+
+	"github.com/dobbo-ca/tiff-go/internal/e"
+)
 
 // Compression codes this package decodes.
 const (
@@ -55,7 +59,7 @@ func (p *Page) TilesAcross() int { return p.across }
 
 func (f *File) one(m map[uint16]Entry, tag uint16, def uint64) (uint64, error) {
 	en, ok := m[tag]
-	if !ok || (tag == 274 && en.bad) { // a bad Orientation reads as 1
+	if !ok || ((tag == 274 || tag == 266) && en.bad) { // a bad Orientation or FillOrder reads as 1
 		return def, nil
 	}
 	if en.Count != 1 {
@@ -71,17 +75,17 @@ func (f *File) Page(i int, maxPixels int64) (*Page, error) {
 		return nil, err
 	}
 	p := &Page{F: f}
-	var v [12]uint64
+	var v [11]uint64
 	for k, t := range [...]struct {
 		tag uint16
 		def uint64
-	}{{256, 0}, {257, 0}, {259, 1}, {262, 1 << 20}, {274, 1}, {277, 1}, {278, 1<<32 - 1},
+	}{{256, 0}, {257, 0}, {259, 1}, {262, 1 << 20}, {274, 1}, {277, 1},
 		{284, 1}, {317, 1}, {266, 1}, {322, 0}, {323, 0}} {
 		if v[k], err = f.one(m, t.tag, t.def); err != nil {
 			return nil, err
 		}
 	}
-	w, h, comp, photo, orient, spp, rps, planar, pred, fill, tw, tl := v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11]
+	w, h, comp, photo, orient, spp, planar, pred, fill, tw, tl := v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10]
 	if w == 0 || h == 0 || w > 1<<31 || h > 1<<31 {
 		return nil, e.Corrupt("dimensions")
 	}
@@ -118,7 +122,7 @@ func (f *File) Page(i int, maxPixels int64) (*Page, error) {
 	if pred != 1 && pred != 2 {
 		return nil, e.Unsupported("predictor %d", pred)
 	}
-	if en, ok := m[339]; ok && !en.bad { // a bad SampleFormat reads as unsigned
+	if en, ok := m[339]; ok {
 		sf, err := f.Ints(en, 16)
 		if err != nil {
 			return nil, err
@@ -212,6 +216,10 @@ func (f *File) Page(i int, maxPixels int64) (*Page, error) {
 		p.across, p.down = int((w+tw-1)/tw), int((h+tl-1)/tl)
 		need = uint64(p.across) * uint64(p.down)
 	} else {
+		rps, err := f.one(m, 278, 1<<32-1)
+		if err != nil {
+			return nil, err
+		}
 		if rps == 0 {
 			return nil, e.Corrupt("rows per strip")
 		}
@@ -226,7 +234,7 @@ func (f *File) Page(i int, maxPixels int64) (*Page, error) {
 		return nil, e.Corrupt("chunk table")
 	}
 	for _, t := range skipped {
-		if m[t].bad {
+		if m[t].bad && !slices.Contains(p.Skipped, t) {
 			p.Skipped = append(p.Skipped, t)
 		}
 	}
