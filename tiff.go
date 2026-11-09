@@ -99,6 +99,10 @@ type Info struct {
 	RowBytes        int64    // bytes in one delivered row
 	ColorMap        []uint16 // 3<<BitsPerSample entries for Palette: reds, greens, blues
 	ExtraSamples    []uint16
+	// Skipped lists, in file order, the tags ignored because their count or
+	// offset lies outside the file and decoding does not need them. A skipped
+	// Orientation reads as 1; a skipped XMP (700) is simply absent.
+	Skipped []uint16
 }
 
 // Page is one parsed directory.
@@ -115,7 +119,7 @@ func (p *Page) Info() Info {
 	}
 	return Info{Width: p.p.Width, Height: p.p.Height, SamplesPerPixel: p.p.SPP, BitsPerSample: p.p.BPS,
 		Photometric: ph, Compression: p.p.Compression, Orientation: p.p.Orientation, RowBytes: p.p.RowBytes(),
-		ColorMap: p.p.ColorMap, ExtraSamples: p.p.ExtraSamples}
+		ColorMap: p.p.ColorMap, ExtraSamples: p.p.ExtraSamples, Skipped: p.p.Skipped}
 }
 
 // Rows calls fn with consecutive bands of full-width rows starting at row y.

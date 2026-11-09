@@ -172,15 +172,29 @@ func typeSize(t uint16) uint64 {
 	return 0
 }
 
-func (f *File) entries(off int64) (map[uint16]Entry, error) {
+// needed reports the tags Page reads to decode; an out-of-range value on one
+// of them is corrupt, on any other the tag is skipped.
+func needed(tag uint16) bool {
+	switch tag {
+	case 256, 257, 258, 259, 262, 266, 273, 277, 278, 279, 284, 292, 293, 317,
+		320, 322, 323, 324, 325, 338, 339, 347:
+		return true
+	}
+	return false
+}
+
+// entries returns the directory's tags and, in file order, the ids of the
+// tags it skipped for a count or offset outside the file.
+func (f *File) entries(off int64) (map[uint16]Entry, []uint16, error) {
 	n, start, err := f.count(off)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	buf := make([]byte, n*f.entrySize())
 	if err := f.readAt(buf, start); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	var skipped []uint16
 	m := make(map[uint16]Entry, n)
 	vw := f.offSize()
 	for i := int64(0); i < n; i++ {
@@ -195,7 +209,11 @@ func (f *File) entries(off int64) (map[uint16]Entry, error) {
 			continue // unknown type: ignore the tag
 		}
 		if en.Count > uint64(f.size)/en.sz+uint64(vw) {
-			return nil, e.Corrupt("tag %d count", en.Tag)
+			if !needed(en.Tag) {
+				skipped = append(skipped, en.Tag)
+				continue
+			}
+			return nil, nil, e.Corrupt("tag %d count", en.Tag)
 		}
 		if en.Count*en.sz <= uint64(vw) {
 			en.isInline = true
@@ -203,13 +221,17 @@ func (f *File) entries(off int64) (map[uint16]Entry, error) {
 		} else {
 			o := f.uint(b[:vw])
 			if o > uint64(f.size) || en.Count*en.sz > uint64(f.size)-o {
-				return nil, e.Corrupt("tag %d value outside file", en.Tag)
+				if !needed(en.Tag) {
+					skipped = append(skipped, en.Tag)
+					continue
+				}
+				return nil, nil, e.Corrupt("tag %d value outside file", en.Tag)
 			}
 			en.off = int64(o)
 		}
 		m[en.Tag] = en
 	}
-	return m, nil
+	return m, skipped, nil
 }
 
 // Val returns integer element i of an unsigned-integer entry (BYTE, SHORT,

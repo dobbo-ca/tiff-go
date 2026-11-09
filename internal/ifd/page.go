@@ -35,7 +35,8 @@ type Page struct {
 	ColorMap                 []uint16
 	ExtraSamples             []uint16
 	JPEGTables               []byte
-	TileW, TileL             int // zero for strips
+	Skipped                  []uint16 // tags dropped for a count or offset outside the file
+	TileW, TileL             int      // zero for strips
 	RowsPerStrip             int
 	Offsets, Counts          Entry
 	across, down, nStrips    int
@@ -65,11 +66,11 @@ func (f *File) one(m map[uint16]Entry, tag uint16, def uint64) (uint64, error) {
 
 // Page parses IFD i. maxPixels caps Width*Height.
 func (f *File) Page(i int, maxPixels int64) (*Page, error) {
-	m, err := f.entries(f.Offs[i])
+	m, skipped, err := f.entries(f.Offs[i])
 	if err != nil {
 		return nil, err
 	}
-	p := &Page{F: f}
+	p := &Page{F: f, Skipped: skipped}
 	var v [12]uint64
 	for k, t := range [...]struct {
 		tag uint16
