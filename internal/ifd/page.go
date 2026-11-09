@@ -39,7 +39,7 @@ type Page struct {
 	ColorMap                 []uint16
 	ExtraSamples             []uint16
 	JPEGTables               []byte
-	Skipped                  []uint16 // tags dropped for a count or offset outside the file
+	Skipped                  []uint16 // tags dropped for a count or offset outside the file; a later valid duplicate is read instead and not listed
 	TileW, TileL             int      // zero for strips
 	RowsPerStrip             int
 	Offsets, Counts          Entry
@@ -186,7 +186,7 @@ func (f *File) Page(i int, maxPixels int64) (*Page, error) {
 		}
 	}
 	if en, ok := m[347]; ok && comp == JPEG {
-		if en.Count > 1<<20 {
+		if en.Count > 1<<20 && !en.bad { // a bad entry is corrupt, via Bytes
 			return nil, &e.LimitError{Name: "jpeg tables", Got: int64(min(en.Count, 1<<62)), Max: 1 << 20}
 		}
 		if p.JPEGTables, err = f.Bytes(en); err != nil {
