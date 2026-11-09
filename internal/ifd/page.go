@@ -64,6 +64,9 @@ func (f *File) one(m map[uint16]Entry, tag uint16, def uint64) (uint64, error) {
 	if !ok || ((tag == 274 || tag == 266) && en.bad) { // a bad Orientation or FillOrder reads as 1
 		return def, nil
 	}
+	if tag == 274 && (en.Count != 1 || !slices.Contains([]uint16{1, 3, 4, 16}, en.Type)) { // so does a wrong type or count
+		return def, nil
+	}
 	if en.Count != 1 {
 		return 0, e.Corrupt("tag %d count", tag)
 	}

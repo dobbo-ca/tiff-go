@@ -93,3 +93,25 @@ func TestEntriesOverflowSafe(t *testing.T) {
 		}
 	}
 }
+
+// Orientation entries list in every tag order, whatever the last entry is.
+func TestOrientationEntriesAnyOrder(t *testing.T) {
+	bad := [][4]uint64{{274, 12, 1, 0}, {274, 8, 1, 0}, {274, 2, 1, 0}, {274, 3, 2, 0}, {274, 3, 0, 0}}
+	for _, big := range []bool{false, true} {
+		for _, x := range bad {
+			for _, first := range []bool{false, true} {
+				b := oobTIFF(big, 274, 3, 1, 6, x)
+				if first {
+					b = oobTIFF(big, uint16(x[0]), uint16(x[1]), x[2], x[3], [4]uint64{274, 3, 1, 6})
+				}
+				p := page0(t, b, tiff.Limits{})
+				if len(p.Orientations) != 2 {
+					t.Fatalf("big=%v %v first=%v: %+v", big, x, first, p.Orientations)
+				}
+			}
+		}
+		if p := page0(t, oobTIFF(big, 274, 8, 1, 6), tiff.Limits{}); len(p.Orientations) != 1 || !p.Orientations[0].BadType {
+			t.Fatalf("lone sshort: %+v", p.Orientations)
+		}
+	}
+}
