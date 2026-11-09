@@ -27,7 +27,7 @@ type File struct {
 func (f *File) ByteOrder() binary.ByteOrder { return f.bo }
 
 func (f *File) readAt(p []byte, off int64) error {
-	if off < 0 || off+int64(len(p)) > f.size {
+	if off < 0 || off > f.size || int64(len(p)) > f.size-off {
 		return e.Corrupt("read outside file")
 	}
 	if _, err := f.ra.ReadAt(p, off); err != nil && (err != io.EOF || len(p) == 0) {
@@ -142,7 +142,7 @@ func (f *File) count(off int64) (n, start int64, err error) {
 		return 0, 0, e.Corrupt("empty ifd")
 	}
 	n, start = int64(c), off+w
-	if start+n*f.entrySize()+f.offSize() > f.size {
+	if need := w + n*f.entrySize() + f.offSize(); off > f.size-need {
 		return 0, 0, e.Corrupt("ifd past end of file")
 	}
 	return
@@ -176,17 +176,19 @@ func typeSize(t uint16) uint64 {
 // entries returns the directory's tags and, in file order, the ids of those
 // whose count or offset lies outside the file. Such a tag is kept with bad
 // set: reading its value is corrupt, so only the tags a page reads can make
-// it corrupt.
-func (f *File) entries(off int64) (map[uint16]Entry, []uint16, error) {
+// it corrupt. The Orientation and XMP entries come back too, unmapped and in
+// file order, whatever their type.
+func (f *File) entries(off int64) (map[uint16]Entry, []uint16, []Entry, error) {
 	n, start, err := f.count(off)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	buf := make([]byte, n*f.entrySize())
 	if err := f.readAt(buf, start); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	var skipped []uint16
+	var tagged []Entry
 	m := make(map[uint16]Entry, n)
 	vw := f.offSize()
 	for i := int64(0); i < n; i++ {
@@ -197,31 +199,29 @@ func (f *File) entries(off int64) (map[uint16]Entry, []uint16, error) {
 		} else {
 			en.Count, b = uint64(f.bo.Uint32(b[4:])), b[8:]
 		}
-		if en.sz = typeSize(en.Type); en.sz == 0 {
-			continue // unknown type: ignore the tag
-		}
-		if en.Count > uint64(f.size)/en.sz+uint64(vw) {
-			en.bad = true
-			skipped = append(skipped, en.Tag)
-			m[en.Tag] = en
-			continue
-		}
-		if en.Count*en.sz <= uint64(vw) {
+		// Range checks divide instead of multiplying: Count*sz can wrap.
+		switch en.sz = typeSize(en.Type); {
+		case en.sz == 0: // unknown type: ignore the tag
+		case en.Count <= uint64(vw)/en.sz:
 			en.isInline = true
 			copy(en.inline[:], b[:vw])
-		} else {
+		default:
 			o := f.uint(b[:vw])
-			if o > uint64(f.size) || en.Count*en.sz > uint64(f.size)-o {
-				en.bad = true
-				skipped = append(skipped, en.Tag)
-				m[en.Tag] = en
-				continue
+			if en.bad = o > uint64(f.size) || en.Count > (uint64(f.size)-o)/en.sz; !en.bad {
+				en.off = int64(o)
 			}
-			en.off = int64(o)
 		}
-		m[en.Tag] = en
+		if en.bad {
+			skipped = append(skipped, en.Tag)
+		}
+		if en.Tag == 274 || en.Tag == 700 {
+			tagged = append(tagged, en)
+		}
+		if en.sz != 0 {
+			m[en.Tag] = en
+		}
 	}
-	return m, skipped, nil
+	return m, skipped, tagged, nil
 }
 
 // Val returns integer element i of an unsigned-integer entry (BYTE, SHORT,
