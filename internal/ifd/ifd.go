@@ -156,6 +156,7 @@ type Entry struct {
 	inline    [8]byte
 	isInline  bool
 	off       int64
+	bad       bool // count or offset outside the file
 }
 
 func typeSize(t uint16) uint64 {
@@ -172,15 +173,20 @@ func typeSize(t uint16) uint64 {
 	return 0
 }
 
-func (f *File) entries(off int64) (map[uint16]Entry, error) {
+// entries returns the directory's tags and, in file order, the ids of those
+// whose count or offset lies outside the file. Such a tag is kept with bad
+// set: reading its value is corrupt, so only the tags a page reads can make
+// it corrupt.
+func (f *File) entries(off int64) (map[uint16]Entry, []uint16, error) {
 	n, start, err := f.count(off)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	buf := make([]byte, n*f.entrySize())
 	if err := f.readAt(buf, start); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	var skipped []uint16
 	m := make(map[uint16]Entry, n)
 	vw := f.offSize()
 	for i := int64(0); i < n; i++ {
@@ -195,7 +201,10 @@ func (f *File) entries(off int64) (map[uint16]Entry, error) {
 			continue // unknown type: ignore the tag
 		}
 		if en.Count > uint64(f.size)/en.sz+uint64(vw) {
-			return nil, e.Corrupt("tag %d count", en.Tag)
+			en.bad = true
+			skipped = append(skipped, en.Tag)
+			m[en.Tag] = en
+			continue
 		}
 		if en.Count*en.sz <= uint64(vw) {
 			en.isInline = true
@@ -203,18 +212,24 @@ func (f *File) entries(off int64) (map[uint16]Entry, error) {
 		} else {
 			o := f.uint(b[:vw])
 			if o > uint64(f.size) || en.Count*en.sz > uint64(f.size)-o {
-				return nil, e.Corrupt("tag %d value outside file", en.Tag)
+				en.bad = true
+				skipped = append(skipped, en.Tag)
+				m[en.Tag] = en
+				continue
 			}
 			en.off = int64(o)
 		}
 		m[en.Tag] = en
 	}
-	return m, nil
+	return m, skipped, nil
 }
 
 // Val returns integer element i of an unsigned-integer entry (BYTE, SHORT,
 // LONG, LONG8), reading it from the file only when it is not inline.
 func (f *File) Val(en Entry, i uint64) (uint64, error) {
+	if en.bad {
+		return 0, e.Corrupt("tag %d value outside file", en.Tag)
+	}
 	switch en.Type {
 	case 1, 3, 4, 16:
 	default:
@@ -235,6 +250,9 @@ func (f *File) Val(en Entry, i uint64) (uint64, error) {
 
 // Bytes returns an entry's whole value; the caller has bounded Count.
 func (f *File) Bytes(en Entry) ([]byte, error) {
+	if en.bad {
+		return nil, e.Corrupt("tag %d value outside file", en.Tag)
+	}
 	n := en.Count * en.sz
 	if en.isInline {
 		return en.inline[:n], nil
