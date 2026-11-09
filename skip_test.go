@@ -147,3 +147,22 @@ func TestSkippedOnceAndTiledIgnoresRowsPerStrip(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// An out-of-range JPEGTables on a JPEG page is corrupt, not a limit error.
+func TestOutOfRangeJPEGTablesIsCorrupt(t *testing.T) {
+	for _, big := range []bool{false, true} {
+		b := oobTIFF(big, 347, 7, 1<<30, 0, [4]uint64{259, 3, 1, 7})
+		if _, _, err := decode(t, b, tiff.Limits{}, 0); !errors.Is(err, tiff.ErrCorrupt) || errors.Is(err, tiff.ErrLimit) {
+			t.Fatalf("big=%v %v", big, err)
+		}
+	}
+}
+
+func TestBadEntryThenValidDuplicateReadsValid(t *testing.T) {
+	b := oobTIFF(false, 274, 3, 1<<30, 0, [4]uint64{274, 3, 1, 6})
+	f, _ := tiff.Open(bytes.NewReader(b), int64(len(b)), tiff.Limits{})
+	p, err := f.Page(0)
+	if err != nil || p.Info().Orientation != 6 || len(p.Info().Skipped) != 0 {
+		t.Fatalf("%v %+v", err, p.Info())
+	}
+}
