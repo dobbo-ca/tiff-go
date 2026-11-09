@@ -2,7 +2,6 @@ package tiff_test
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,13 +60,19 @@ func abs(x int) int {
 }
 
 // jpeg-go decodes only baseline interleaved (or single-component) frames a band
-// at a time; any other frame must be refused, not decoded whole per band.
-func TestJPEGNotBandable(t *testing.T) {
-	for name, want := range map[string]error{"jpeg_baseline": nil, "jpeg_noninterleaved": tiff.ErrUnsupported, "jpeg_progressive_fill": tiff.ErrUnsupported} {
+// at a time, so any other frame is decoded whole per band. It must still decode,
+// and to what one unbanded decode gives.
+func TestJPEGAnyFrameBands(t *testing.T) {
+	for _, name := range []string{"jpeg_baseline", "jpeg_noninterleaved", "jpeg_progressive_fill"} {
 		j, _ := os.ReadFile(filepath.Join("testdata", "synthetic", name+".jpg"))
 		b := fixture.File{Pages: []fixture.Page{{W: 16, H: 64, SPP: 3, BPS: 8, Photometric: 2, Compression: 7, RowsPerStrip: 64, Chunks: [][]byte{j}}}}.Bytes()
-		if _, _, err := decode(t, b, tiff.Limits{MaxBandBytes: 4 * 16 * 8}, 0); !errors.Is(err, want) {
-			t.Errorf("%s: %v", name, err)
+		want, _, err := decode(t, b, tiff.Limits{}, 0)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		got, _, err := decode(t, b, tiff.Limits{MaxBandBytes: 4 * 16 * 8}, 0)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Errorf("%s: banded %v, equal %v", name, err, bytes.Equal(got, want))
 		}
 	}
 }

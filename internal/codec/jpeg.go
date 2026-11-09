@@ -56,8 +56,11 @@ func newJPEG(ctx context.Context, src *io.SectionReader, p Params) (RowReader, e
 		return nil, &e.LimitError{Name: "band bytes", Got: px * int64(p.W), Max: p.BandBytes}
 	}
 	j.bandRows = int(min(int64(p.H), p.BandBytes/(px*int64(p.W))))
-	if j.bandRows < j.h && !bandable(b) { // jpeg-go decodes the whole frame per band
-		return nil, e.Unsupported("jpeg larger than a band that is not baseline interleaved")
+	if j.bandRows < j.h && !bandable(b) {
+		// jpeg-go decodes the whole frame for every band: its coefficient and plane
+		// buffers run to 17 bytes a pixel (4:4:4), past the band budget. Open's MaxPixels
+		// bounds the frame before this allocation.
+		j.opts.Limits.MaxBytes = max(j.opts.Limits.MaxBytes, 20*int64(p.W)*int64(p.H))
 	}
 	return j, nil
 }

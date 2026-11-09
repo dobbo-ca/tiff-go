@@ -31,3 +31,8 @@ decoded a band of rows at a time through its `Region` option. Each band
 re-decodes entropy data from the chunk start, so a chunk of N bands costs
 O(N^2) entropy work. Fine at the default 64 MiB band (a few bands per chunk);
 revisit with restart-marker offsets if a workload needs it.
+
+A frame jpeg-go cannot band (progressive, or a first scan without every component)
+is decoded whole for every band, so its per-call budget is 20 bytes a pixel, not
+the band budget: it is never refused for its size, only by `MaxPixels` and
+jpeg-go's own 1 GiB cap.
